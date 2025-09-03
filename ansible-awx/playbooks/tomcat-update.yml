@@ -5,7 +5,6 @@
   become_user: root
 
   vars:
-    tomcat_version: "{{ tomcat_v }}"
     tomcat_base_dir: "/usr/local/tomcat"
     temp_download_dir: "/tmp/tomcat_update"
 
@@ -18,7 +17,7 @@
 
     - name: Download the latest Tomcat binary
       ansible.builtin.get_url:
-        url: "https://dlcdn.apache.org/tomcat/tomcat-9/v{{ tomcat_version }}/bin/apache-tomcat-{{ tomcat_version }}.tar.gz"
+        url: "https://archive.apache.org/dist/tomcat/tomcat-9/v{{ tomcat_version }}/bin/apache-tomcat-{{ tomcat_version }}.tar.gz"
         dest: "{{ temp_download_dir }}/apache-tomcat-{{ tomcat_version }}.tar.gz"
         mode: '0644'
       register: download_status
