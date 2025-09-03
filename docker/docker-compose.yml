@@ -1,18 +1,18 @@
 services:
-  tomcat1:
+  test-application-1:
     build:
       context: .
       dockerfile: Dockerfile-t9-0-106
-    container_name: tomcat1
+    container_name: test-application-1
     ports:
       - "2221:22"     # SSH
       - "8081:8080"   # Tomcat
 
-  tomcat2:
+  test-application-2:
     build:
       context: .
-      dockerfile: Dockerfile-t10-1-43
-    container_name: tomcat2
+      dockerfile: Dockerfile-t9-0-106
+    container_name: test-application-2
     ports:
       - "2222:22"     # SSH
       - "8082:8080"   # Tomcat

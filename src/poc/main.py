@@ -114,7 +114,7 @@ def scan_tomcat_libs() -> str:
 
 @mcp.tool
 def check_tomcat_vulnerabilities() -> str:
-    """Check Tomcat version for known CVEs using NVD API"""
+    """Check Tomcat version for known CVEs using NVD API. Offer to help if version is vulnerable."""
     
     client = get_ssh_client()
 
@@ -137,7 +137,7 @@ def check_tomcat_vulnerabilities() -> str:
         return f"Error querying NVD: {e}"
 
     if "vulnerabilities" not in data or not data["vulnerabilities"]:
-        return f"Tomcat {version} appears clean (no CVEs found)."
+        return f"✅ Tomcat {version} appears clean (no CVEs found)."
 
     results = []
     for vuln in data["vulnerabilities"][:5]:  # limit output
@@ -145,7 +145,7 @@ def check_tomcat_vulnerabilities() -> str:
         description = vuln["cve"]["descriptions"][0]["value"]
         results.append(f"{cve_id}: {description}")
 
-    return f"Tomcat {version} CVEs:\n" + "\n".join(results)
+    return f"⚠️ Tomcat {version} CVEs:\n" + "\n".join(results)
 
 
 if __name__ == "__main__":

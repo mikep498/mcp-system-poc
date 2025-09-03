@@ -1,0 +1,44 @@
+---
+- name: Update Tomcat binaries
+  hosts: all
+  become: yes
+  become_user: root
+
+  vars:
+    tomcat_version: "{{ tomcat_v }}"
+    tomcat_base_dir: "/usr/local/tomcat"
+    temp_download_dir: "/tmp/tomcat_update"
+
+  tasks:
+    - name: Ensure temporary download directory exists
+      ansible.builtin.file:
+        path: "{{ temp_download_dir }}"
+        state: directory
+        mode: '0755'
+
+    - name: Download the latest Tomcat binary
+      ansible.builtin.get_url:
+        url: "https://dlcdn.apache.org/tomcat/tomcat-9/v{{ tomcat_version }}/bin/apache-tomcat-{{ tomcat_version }}.tar.gz"
+        dest: "{{ temp_download_dir }}/apache-tomcat-{{ tomcat_version }}.tar.gz"
+        mode: '0644'
+      register: download_status
+
+    - name: Unpack the Tomcat archive
+      ansible.builtin.unarchive:
+        src: "{{ temp_download_dir }}/apache-tomcat-{{ tomcat_version }}.tar.gz"
+        dest: "{{ temp_download_dir }}"
+        remote_src: yes
+        creates: "{{ temp_download_dir }}/apache-tomcat-{{ tomcat_version }}/bin"
+
+    - name: Move the new bin directory and overwrite
+      ansible.builtin.command:
+        cmd: "rsync -av --remove-source-files {{ temp_download_dir }}/apache-tomcat-{{ tomcat_version }}/bin/ {{ tomcat_base_dir }}/bin/"
+
+    - name: Move the new lib directory and overwrite
+      ansible.builtin.command:
+        cmd: "rsync -av --remove-source-files {{ temp_download_dir }}/apache-tomcat-{{ tomcat_version }}/lib/ {{ tomcat_base_dir }}/lib/"
+
+    - name: Clean up temporary download directory
+      ansible.builtin.file:
+        path: "{{ temp_download_dir }}"
+        state: absent
