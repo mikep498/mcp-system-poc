@@ -1,4 +1,6 @@
+import json
 import os
+import sys
 import paramiko
 import requests
 import re
@@ -12,7 +14,11 @@ SSH_PORT = int(os.getenv("SSH_PORT", "22"))
 SSH_USER = os.getenv("SSH_USER")
 SSH_PASS = os.getenv("SSH_PASS")
 
-mcp = FastMCP(name="Tomcat Log Analyzer")
+AWX_URL = os.getenv("AWX_URL")
+AWX_TEMPLATE_ID = os.getenv("AWX_TEMPLATE_ID")
+AWX_TOKEN = os.getenv("AWX_TOKEN")
+
+mcp = FastMCP(name="Tomcat server maintainer")
 
 def get_ssh_client() -> paramiko.SSHClient:
     client = paramiko.SSHClient()
@@ -92,7 +98,7 @@ def scan_tomcat_libs() -> str:
     
     results = []
     for jar in jar_list[:15]:  # check first 15 JARs
-        package_name = jar.split("-")[0]  # crude guess from filename
+        package_name = jar.split("-")[0]
         try:
             resp = requests.post(
                 "https://api.osv.dev/v1/query",
@@ -122,7 +128,6 @@ def check_tomcat_vulnerabilities() -> str:
     version_output = stdout.read().decode() + stderr.read().decode()
     client.close()
 
-    # Example: extract version string like "Apache Tomcat/9.0.40"
     match = re.search(r"Apache Tomcat/([0-9.]+)", version_output)
     if not match:
         return f"Could not detect Tomcat version:\n{version_output}"
@@ -140,13 +145,38 @@ def check_tomcat_vulnerabilities() -> str:
         return f"✅ Tomcat {version} appears clean (no CVEs found)."
 
     results = []
-    for vuln in data["vulnerabilities"][:5]:  # limit output
+    for vuln in data["vulnerabilities"][:5]:
         cve_id = vuln["cve"]["id"]
         description = vuln["cve"]["descriptions"][0]["value"]
         results.append(f"{cve_id}: {description}")
 
     return f"⚠️ Tomcat {version} CVEs:\n" + "\n".join(results)
 
+@mcp.tool
+def update_tomcat_version(version: str, application: str):
+    """Update tomcat to given version with AWX. Check the version for CVEs afterwards."""
+
+    api_endpoint = f"{AWX_URL}/api/v2/job_templates/{AWX_TEMPLATE_ID}/launch/"
+    
+    headers = {
+        "Authorization": f"Bearer {AWX_TOKEN}",
+        "Content-Type": "application/json"
+    }
+
+    payload = {}
+    if application:
+        payload["limit"] = application
+    
+    payload["extra_vars"] = {
+        "tomcat_version": version
+    }
+
+    try:
+        response = requests.post(api_endpoint, headers=headers, data=json.dumps(payload))
+        response.raise_for_status()
+        return response.json()
+    except requests.exceptions.RequestException as e:
+        return f"An error occurred: {e}"
 
 if __name__ == "__main__":
     #mcp.run(transport="http", host="127.0.0.1", port=5000)
