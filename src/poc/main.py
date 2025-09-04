@@ -1,11 +1,12 @@
 import json
 import os
 import sys
+import time
 import paramiko
 import requests
 import re
 from dotenv import load_dotenv
-from fastmcp import FastMCP
+from fastmcp import FastMCP, Context
 from datetime import datetime, timedelta
 
 load_dotenv()
@@ -32,6 +33,29 @@ def get_ssh_client() -> paramiko.SSHClient:
     return client
 
 @mcp.tool
+def get_tomcat_version(ctx: Context) -> str:
+    """
+    Gets the current Tomcat version running on the server.
+
+    Args:
+        ctx: LLM context
+    """
+     
+    client = get_ssh_client()
+
+    stdin, stdout, stderr = client.exec_command("/usr/local/tomcat/bin/version.sh")
+    version_output = stdout.read().decode() + stderr.read().decode()
+    client.close()
+
+    match = re.search(r"Apache Tomcat/([0-9.]+)", version_output)
+    if not match:
+        ctx.warning(f"Could not detect Tomcat version:\n{version_output}") 
+        return ""
+    version = match.group(1)
+
+    return version
+
+@mcp.tool
 async def summarize_tomcat_logs(day: str) -> str:
     """
     Summarize Tomcat logs by date.
@@ -40,6 +64,9 @@ async def summarize_tomcat_logs(day: str) -> str:
       - "yesterday"
       - "N days ago" (e.g., "2 days ago")
       - Explicit date "YYYY-MM-DD"
+
+    Args:
+        day: Day from which the logs should be gathered.
     """
     day_lower = day.lower().strip()
 
@@ -119,21 +146,14 @@ def scan_tomcat_libs() -> str:
 
 
 @mcp.tool
-def check_tomcat_vulnerabilities() -> str:
-    """Check Tomcat version for known CVEs using NVD API. Offer to help if version is vulnerable."""
+def check_tomcat_vulnerabilities(version: str) -> str:
+    """
+    Check Tomcat version for known CVEs using NVD API. Offer to help if version is vulnerable.
     
-    client = get_ssh_client()
-
-    stdin, stdout, stderr = client.exec_command("/usr/local/tomcat/bin/version.sh")
-    version_output = stdout.read().decode() + stderr.read().decode()
-    client.close()
-
-    match = re.search(r"Apache Tomcat/([0-9.]+)", version_output)
-    if not match:
-        return f"Could not detect Tomcat version:\n{version_output}"
-    version = match.group(1)
-
-    # Query NVD
+    Args:
+        version: The Tomcat version.
+    """
+    
     url = f"https://services.nvd.nist.gov/rest/json/cves/2.0?cpeName=cpe:2.3:a:apache:tomcat:{version}:*:*:*:*:*:*:*"
     try:
         response = requests.get(url, timeout=10)
@@ -153,30 +173,70 @@ def check_tomcat_vulnerabilities() -> str:
     return f"⚠️ Tomcat {version} CVEs:\n" + "\n".join(results)
 
 @mcp.tool
-def update_tomcat_version(version: str, application: str):
-    """Update tomcat to given version with AWX. Check the version for CVEs afterwards."""
+def update_tomcat_version(ctx: Context, version: str, application: str, poll_interval: int = 15, timeout: int = 1800):
+    """
+    Launches an AWX job to update Tomcat and waits for it to complete. Check the tomcat version on the server afterwards.
 
-    api_endpoint = f"{AWX_URL}/api/v2/job_templates/{AWX_TEMPLATE_ID}/launch/"
-    
+    Args:
+        ctx: LLM context
+        version: The target Tomcat version.
+        application: The specific application or host to target (used for the 'limit' in AWX).
+        poll_interval: Seconds to wait between status checks.
+        timeout: Maximum seconds to wait for the job to complete.
+    """
     headers = {
         "Authorization": f"Bearer {AWX_TOKEN}",
         "Content-Type": "application/json"
     }
 
-    payload = {}
+    # 1. Launch the Job
+    launch_url = f"{AWX_URL}/api/v2/job_templates/{AWX_TEMPLATE_ID}/launch/"
+    payload = {
+        "extra_vars": {"tomcat_version": version}
+    }
     if application:
         payload["limit"] = application
-    
-    payload["extra_vars"] = {
-        "tomcat_version": version
-    }
 
     try:
-        response = requests.post(api_endpoint, headers=headers, data=json.dumps(payload))
-        response.raise_for_status()
-        return response.json()
+        launch_response = requests.post(launch_url, headers=headers, data=json.dumps(payload))
+        launch_response.raise_for_status()
+        launch_data = launch_response.json()
+        job_id = launch_data.get("job")
+
+        if not job_id:
+            return "Error: Could not retrieve job ID after launching."
+
+        ctx.info(f"Successfully launched AWX job with ID: {job_id}. Waiting for completion...")
+
     except requests.exceptions.RequestException as e:
-        return f"An error occurred: {e}"
+        return f"An error occurred while launching the job: {e}"
+
+    # 2. Poll for Job Completion
+    job_status_url = f"{AWX_URL}/api/v2/jobs/{job_id}/"
+    start_time = time.time()
+
+    while time.time() - start_time < timeout:
+        try:
+            status_response = requests.get(job_status_url, headers=headers)
+            status_response.raise_for_status()
+            status_data = status_response.json()
+            current_status = status_data.get("status")
+
+            if current_status in ["successful", "failed", "error", "canceled"]:
+                return {
+                    "job_id": job_id,
+                    "status": current_status,
+                    "finished": status_data.get("finished"),
+                    "elapsed": status_data.get("elapsed"),
+                    "message": f"Job {job_id} finished with status: {current_status}."
+                }
+
+            time.sleep(poll_interval)
+
+        except requests.exceptions.RequestException as e:
+            return f"An error occurred while checking job status for job {job_id}: {e}"
+
+    return f"Job {job_id} timed out after {timeout} seconds. Last known status was '{current_status}'."
 
 if __name__ == "__main__":
     #mcp.run(transport="http", host="127.0.0.1", port=5000)
