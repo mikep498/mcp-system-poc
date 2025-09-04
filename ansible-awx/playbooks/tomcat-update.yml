@@ -15,7 +15,7 @@
         state: directory
         mode: '0755'
 
-    - name: Download the latest Tomcat binary
+    - name: Download the Tomcat binary from a given version
       ansible.builtin.get_url:
         url: "https://archive.apache.org/dist/tomcat/tomcat-9/v{{ tomcat_version }}/bin/apache-tomcat-{{ tomcat_version }}.tar.gz"
         dest: "{{ temp_download_dir }}/apache-tomcat-{{ tomcat_version }}.tar.gz"
