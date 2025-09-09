@@ -1,0 +1,27 @@
+FROM tomcat:9.0.100-jdk8-corretto-al2
+
+# Install SSH server and sudo
+RUN yum update -y && \
+    yum install -y openssh-server sudo passwd && \
+    yum clean all && \
+    rm -rf /var/cache/yum
+
+# Set root password (change this in real use!)
+RUN echo "root:rootpassword" | chpasswd
+
+# Allow root login via SSH
+RUN sed -i 's/^#PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config
+
+# Create run dir
+RUN mkdir -p /var/run/sshd
+
+# Init default webapps
+RUN cp -R /usr/local/tomcat/webapps.dist/* /usr/local/tomcat/webapps
+
+# Generate host keys at build time
+RUN ssh-keygen -A
+
+EXPOSE 8080 22
+
+# Start SSH and Tomcat
+CMD /usr/sbin/sshd && catalina.sh run

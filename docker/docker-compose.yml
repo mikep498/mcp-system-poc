@@ -16,3 +16,12 @@ services:
     ports:
       - "2222:22"     # SSH
       - "8082:8080"   # Tomcat
+
+  test-application-3:
+    build:
+      context: .
+      dockerfile: Dockerfile-t9-0-100
+    container_name: test-application-3
+    ports:
+      - "2223:22"     # SSH
+      - "8083:8080"   # Tomcat
