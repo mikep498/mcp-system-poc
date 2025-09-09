@@ -11,7 +11,9 @@ from datetime import datetime, timedelta
 
 load_dotenv()
 SSH_HOST = os.getenv("SSH_HOST")
-SSH_PORT = int(os.getenv("SSH_PORT", "22"))
+SSH_PORT_1 = int(os.getenv("SSH_PORT_1", "22"))
+SSH_PORT_2 = int(os.getenv("SSH_PORT_2", "22"))
+SSH_PORT_3 = int(os.getenv("SSH_PORT_3", "22"))
 SSH_USER = os.getenv("SSH_USER")
 SSH_PASS = os.getenv("SSH_PASS")
 
@@ -21,27 +23,43 @@ AWX_TOKEN = os.getenv("AWX_TOKEN")
 
 mcp = FastMCP(name="Tomcat server maintainer")
 
-def get_ssh_client() -> paramiko.SSHClient:
+def get_ssh_client(application: str) -> paramiko.SSHClient:
     client = paramiko.SSHClient()
     client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-    client.connect(
-        hostname=SSH_HOST,
-        port=SSH_PORT,
-        username=SSH_USER,
-        password=SSH_PASS
-    )
+    if (application == "test_application_1"):
+        client.connect(
+            hostname=SSH_HOST,
+            port=SSH_PORT_1,
+            username=SSH_USER,
+            password=SSH_PASS
+        )
+    elif (application == "test_application_2"):
+        client.connect(
+            hostname=SSH_HOST,
+            port=SSH_PORT_2,
+            username=SSH_USER,
+            password=SSH_PASS
+        )
+    else:
+        client.connect(
+            hostname=SSH_HOST,
+            port=SSH_PORT_3,
+            username=SSH_USER,
+            password=SSH_PASS
+        )
     return client
 
 @mcp.tool
-def get_tomcat_version(ctx: Context) -> str:
+def get_tomcat_version(application: str, ctx: Context) -> str:
     """
-    Gets the current Tomcat version running on the server.
+    Gets the current Tomcat version running on the given application server.
 
     Args:
         ctx: LLM context
+        application: Name of application (test_application_<number>)
     """
      
-    client = get_ssh_client()
+    client = get_ssh_client(application)
 
     stdin, stdout, stderr = client.exec_command("/usr/local/tomcat/bin/version.sh")
     version_output = stdout.read().decode() + stderr.read().decode()
@@ -56,9 +74,9 @@ def get_tomcat_version(ctx: Context) -> str:
     return version
 
 @mcp.tool
-async def summarize_tomcat_logs(day: str) -> str:
+async def summarize_tomcat_logs(application: str, day: str) -> str:
     """
-    Summarize Tomcat logs by date.
+    Summarize Tomcat logs by date. Provide suitable solutions for exceptions, warnings or severe logs.
     Input can be:
       - "today"
       - "yesterday"
@@ -67,6 +85,7 @@ async def summarize_tomcat_logs(day: str) -> str:
 
     Args:
         day: Day from which the logs should be gathered.
+        application: Name of application (test_application_<number>)
     """
     day_lower = day.lower().strip()
 
@@ -92,7 +111,7 @@ async def summarize_tomcat_logs(day: str) -> str:
 
     log_path = f"/usr/local/tomcat/logs/catalina.{date_str}.log"
 
-    client = get_ssh_client()
+    client = get_ssh_client(application)
     
     stdin, stdout, stderr = client.exec_command(f"cat {log_path}")
     log_data = stdout.read().decode()
@@ -107,53 +126,48 @@ async def summarize_tomcat_logs(day: str) -> str:
     return "\n".join(log_data.splitlines()[:5000])
 
 @mcp.tool
-def scan_tomcat_libs() -> str:
+def scan_tomcat_libs(application: str) -> str:
     """
-    List JARs inside Tomcat's /usr/local/tomcat/lib and check them against OSV.dev.
+    List JARs inside Tomcat's /usr/local/tomcat/lib and check them for current vulnerabilities and CVEs. Provide suitable solutions to mitigate the vulnerabilities.
+
+    Args:
+        application: Name of application (test_application_<number>)
     """
     
     lib_path = "/usr/local/tomcat/lib/"
-    cmd = f"ls -1 {lib_path} | grep .jar || echo 'No JARs found'"
+    cmd = f"""
+    for jar in {lib_path}*.jar; do
+        manifest=$(unzip -p "$jar" META-INF/MANIFEST.MF 2>/dev/null)
+        
+        if [[ -n "$manifest" ]]; then
+            name=$(echo "$manifest" | grep -i "^Bundle-SymbolicName:" | cut -d: -f2- | xargs)
+            version=$(echo "$manifest" | grep -i "^Bundle-Version:" | cut -d: -f2- | xargs)
+            echo "$name | $version"
+        else
+            echo "$jar | (no MANIFEST.MF found)"
+        fi
+    done
+    """
     
-    client = get_ssh_client()
+    client = get_ssh_client(application)
     stdin, stdout, stderr = client.exec_command(cmd)
-    jar_list = stdout.read().decode().splitlines()
+    jar_list = stdout.read().decode()
     client.close()
-    
-    if not jar_list or "No JARs" in jar_list[0]:
-        return f"No JARs found in {lib_path}"
-    
-    results = []
-    for jar in jar_list[:15]:  # check first 15 JARs
-        package_name = jar.split("-")[0]
-        try:
-            resp = requests.post(
-                "https://api.osv.dev/v1/query",
-                json={"package": {"name": package_name, "ecosystem": "Maven"}},
-                timeout=10
-            )
-            data = resp.json()
-            if "vulns" in data:
-                vulns = [v["id"] for v in data["vulns"]]
-                results.append(f"{jar}: {', '.join(vulns)}")
-        except Exception as e:
-            results.append(f"{jar}: Error {e}")
-    
-    if not results:
-        return "No known vulnerabilities detected in Tomcat libs."
-    
-    return "Detected vulnerabilities in Tomcat libs:\n" + "\n".join(results)
+
+    if(jar_list):
+        return f"Gathered following JARs with versions: {jar_list}. They should be scanned for vulnerabilities and CVEs."
+    return f"Error occured while gathering JAR information: {stderr}"
 
 
 @mcp.tool
 def check_tomcat_vulnerabilities(version: str) -> str:
     """
-    Check Tomcat version for known CVEs using NVD API. Offer to help if version is vulnerable.
+    Check Tomcat version for known CVEs using NVD API. Provide suitable solutions to mitigate the vulnerabilities.
     
     Args:
         version: The Tomcat version.
     """
-    
+
     url = f"https://services.nvd.nist.gov/rest/json/cves/2.0?cpeName=cpe:2.3:a:apache:tomcat:{version}:*:*:*:*:*:*:*"
     try:
         response = requests.get(url, timeout=10)
@@ -180,7 +194,7 @@ def update_tomcat_version(ctx: Context, version: str, application: str, poll_int
     Args:
         ctx: LLM context
         version: The target Tomcat version.
-        application: The specific application or host to target (used for the 'limit' in AWX).
+        application: The specific application (test_application_<number>) or host to target (used for the 'limit' in AWX).
         poll_interval: Seconds to wait between status checks.
         timeout: Maximum seconds to wait for the job to complete.
     """
